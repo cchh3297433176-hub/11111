@@ -1,0 +1,150 @@
+name: Build RikkaHub APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-rikkahub-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Find and extract source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
+
+          if [ -z "${ZIP}" ]; then
+            echo "::error::No source ZIP found in repository root."
+            exit 1
+          fi
+
+          echo "Using ZIP: ${ZIP}"
+
+          mkdir -p source
+          unzip -q "${ZIP}" -d source
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_ROOT="$(
+            find "$GITHUB_WORKSPACE/source" \
+              -type f \
+              -name gradlew \
+              -printf '%h\n' |
+            while read -r d; do
+              if [ -f "$d/settings.gradle" ] ||
+                 [ -f "$d/settings.gradle.kts" ]; then
+                echo "$d"
+                break
+              fi
+            done
+          )
+
+          if [ -z "${PROJECT_ROOT}" ]; then
+            echo "::error::Could not find Gradle project inside ZIP."
+            exit 1
+          fi
+
+          echo "PROJECT_ROOT=${PROJECT_ROOT}" >> "$GITHUB_ENV"
+
+          echo "Found project:"
+          echo "${PROJECT_ROOT}"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build WebUI
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          if [ -d "web-ui" ] && [ -f "web-ui/package.json" ]; then
+            cd web-ui
+
+            if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+              bun install --frozen-lockfile
+            else
+              bun install
+            fi
+
+            bun run build
+          else
+            echo "No WebUI build required."
+          fi
+
+      - name: Check Firebase configuration
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          if [ -f "app/google-services.json" ]; then
+            echo "google-services.json found."
+          else
+            echo "::warning::app/google-services.json not found."
+            echo "Build may fail if this project requires Firebase configuration."
+          fi
+
+      - name: Make Gradle executable
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+
+          find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
+
+          if ! find "$GITHUB_WORKSPACE/apk-output" \
+              -type f -name "*.apk" | grep -q .; then
+            echo "::error::No APK was generated."
+            exit 1
+          fi
+
+          echo "Generated APK:"
+          ls -lh "$GITHUB_WORKSPACE/apk-output"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RikkaHub-debug-APK
+          path: apk-output/*.apk
+          if-no-files-found: error
+          retention-days: 14
