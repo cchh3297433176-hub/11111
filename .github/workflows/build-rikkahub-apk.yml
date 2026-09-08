@@ -61,7 +61,7 @@ jobs:
         working-directory: source
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --stacktrace
+          ./gradlew :app:assembleDebug -x :web:buildWebUi --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
