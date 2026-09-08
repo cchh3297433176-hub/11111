@@ -25,6 +25,10 @@ jobs:
           mv rikkahub-master source
           echo "Source restored to: $PWD/source"
 
+      - name: Write Firebase config
+        shell: bash
+        run: echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > source/app/google-services.json
+
       - name: Check Firebase config
         shell: bash
         run: |
